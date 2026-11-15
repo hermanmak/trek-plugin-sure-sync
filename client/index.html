@@ -1,0 +1,1547 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sure Sync</title>
+  <!-- trek:ui -->
+  <style>
+    [hidden] { display: none !important; }
+    /* <meta name="viewport"> is ignored inside a sandboxed <iframe> in iOS WebKit; lock text-size-adjust
+       explicitly so WebKit's TextAutosizer never inflates font-size on longer table rows. */
+    :root, body { margin: 0; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+    :root[data-fill], :root[data-fill] body { height: 100%; overflow: hidden; }
+    :root[data-fill] .sei-scroll {
+      height: 100%;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+    .sei-shell {
+      /* Shared tokens for filter controls (--sei-h) and per-row action buttons (--sei-act-h / --sei-act-w)
+         so every row's primary and secondary buttons have identical, state-invariant geometry. */
+      --sei-h: 42px;
+      --sei-act-h: 34px;
+      --sei-act-w: 88px;
+      max-width: 1080px;
+      margin: 0 auto;
+      /* Only the bottom inset is ours to spend: the host already places this view below the app bar,
+         so adding --trek-inset-top here left a dead band under it. */
+      padding: 12px 16px calc(24px + var(--trek-inset-bottom, 0px));
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .sei-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    .sei-h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+    /* Sure's own logomark (client/sure-logomark.svg, copied from Sure's app assets) beside the name. */
+    .sei-brand { display: flex; align-items: center; gap: 6px; }
+    .sei-brand-mark { display: block; width: 20px; height: 18px; }
+    .sei-sub { margin: 4px 0 0; font-size: 13px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 2px 10px; }
+    .sei-sub > span { white-space: nowrap; }
+    /* Let the title column shrink so the action on the right stays on the same line on a phone. */
+    .sei-header > :first-child { flex: 1 1 0; min-width: 0; }
+
+    /* Sub-tabs: Find in Sure / Imported */
+    .sei-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 12px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-primary);
+    }
+    .sei-tab {
+      flex: 1 1 0;
+      min-height: 38px;
+      padding: 7px 12px;
+      border: none;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--text-secondary);
+      font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      transition: background 0.12s, color 0.12s;
+    }
+    .sei-tab:hover { color: var(--text-primary); }
+    /* Selected segment is a raised white pill in light mode, but in dark mode iOS lifts it *lighter* than
+       the track, so it is derived from the text colour there instead of reusing the (darker) card colour. */
+    .sei-tab[aria-selected="true"] {
+      background: var(--bg-card);
+      color: var(--text-primary);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
+    }
+    [data-theme="dark"] .sei-tab[aria-selected="true"] {
+      background: color-mix(in oklch, var(--text-primary) 17%, var(--bg-secondary));
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+    }
+
+    /* Filters: first level = date range, drilldown = category / tag / text */
+    /* Deterministic: four controls on one row, search full width beneath. An auto-fit grid wrapped the
+       search depending on the host's iframe width, which made the layout differ between hosts. */
+    .sei-filter-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .sei-field--wide { grid-column: 1 / -1; }
+    .sei-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .sei-field-lbl {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+    .sei-ctrl {
+      width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
+      height: var(--sei-h);
+      min-height: var(--sei-h);
+      padding: 0 12px;
+      line-height: normal;
+      font-size: 16px !important;
+    }
+    /* The kit's default :focus-visible is a 2px offset outline, which reads as a double ring on a
+       filled input. iOS uses a soft halo instead. */
+    .sei-shell .sei-ctrl:focus,
+    .sei-shell .sei-ctrl:focus-visible {
+      outline: none;
+      border-color: color-mix(in oklch, var(--accent) 55%, var(--border-primary));
+      box-shadow: 0 0 0 3.5px color-mix(in oklch, var(--accent) 15%, transparent);
+    }
+
+    .sei-shell .trek-btn.sei-btn-sm { min-height: 36px; height: 36px; padding: 0 12px; font-size: 13px; border-radius: 9px; }
+    /* Specificity (0,3,0) beats the kit's `[data-form-factor="phone"] .trek-btn` (0,2,0). Both buttons use
+       border: 0 (with an inset 1px ring on the secondary) so primary fill never bleeds 1px taller under a
+       transparent border on @3x screens, and fixed width/height keep + New, Cancel, Replace… and Adding… identical. */
+    .sei-shell .trek-btn.sei-act-btn {
+      box-sizing: border-box;
+      flex: 0 0 var(--sei-act-w);
+      width: var(--sei-act-w);
+      min-width: var(--sei-act-w);
+      height: var(--sei-act-h);
+      min-height: var(--sei-act-h);
+      padding: 0 10px;
+      border: 0;
+      border-radius: 10px;
+      font-size: 12.5px;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .sei-shell .trek-btn.sei-act-btn.sei-act-btn--sub {
+      color: var(--text-primary);
+      background: var(--bg-secondary);
+      box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--text-primary) 16%, var(--border-primary));
+    }
+    .sei-shell .trek-btn.sei-act-btn.sei-act-btn--sub:hover:not(:disabled) {
+      background: var(--bg-hover);
+    }
+    :root[data-form-factor="phone"] .sei-shell {
+      --sei-h: 44px;
+      --sei-act-h: 40px;
+      --sei-act-w: 92px;
+    }
+    :root[data-form-factor="phone"] .sei-shell .trek-btn.sei-btn-sm { min-height: 42px; height: 42px; }
+    @media (pointer: coarse) {
+      .sei-shell {
+        --sei-h: 44px;
+        --sei-act-h: 40px;
+        --sei-act-w: 92px;
+      }
+      .sei-shell .trek-btn.sei-btn-sm { min-height: 42px; height: 42px; }
+    }
+
+    /* Candidate sections: Matched estimates floated above Other card charges */
+    .sei-sections { display: flex; flex-direction: column; gap: 16px; }
+    .sei-section { display: flex; flex-direction: column; gap: 7px; }
+    .sei-section-hdr {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 11.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+    .sei-section-hdr--match { color: var(--text-primary); }
+    .sei-section-cnt {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 20px;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-primary);
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+    .sei-table-wrap--match {
+      border-color: color-mix(in oklch, var(--accent) 38%, var(--border-primary));
+    }
+    .sei-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--m-cbr, var(--border-primary));
+      border-radius: var(--radius-md);
+      background: var(--m-card, var(--bg-card));
+    }
+    table.sei-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    .sei-table th, .sei-table td {
+      padding: 11px 12px;
+      text-align: left;
+      border-bottom: 1px solid var(--border-faint);
+      vertical-align: top;
+    }
+    .sei-table th {
+      font-size: 11.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      background: var(--bg-secondary);
+      white-space: nowrap;
+    }
+    .sei-table tr:last-child td { border-bottom: none; }
+    /* Correlation chips carry long merchant/cost names; letting them wrap keeps the table inside its card. */
+    .sei-table td .trek-chip { white-space: normal; overflow-wrap: anywhere; }
+    .sei-table tbody tr:hover { background: var(--bg-hover); }
+    .sei-table tbody tr.sei-row-muted { opacity: 0.68; }
+    .sei-table tbody tr.sei-row-open {
+      background: color-mix(in oklch, var(--accent) 7%, transparent);
+    }
+    .sei-table tbody tr.sei-row-open td { border-bottom-color: transparent; }
+    .sei-num { text-align: right !important; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .sei-act-col { text-align: right !important; white-space: nowrap; }
+    .sei-row-acts {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+    /* Desktop columns: date, amount, and actions hug their content; merchant gets a steady share; match takes the rest. */
+    @media (min-width: 721px) {
+      .sei-table--candidates th:nth-child(1), .sei-table--candidates td.sei-td-date,
+      .sei-table--candidates th:nth-child(4), .sei-table--candidates td.sei-td-amt,
+      .sei-table--candidates th:nth-child(5), .sei-table--candidates td.sei-td-acts { width: 1%; white-space: nowrap; }
+      .sei-table--candidates th:nth-child(2), .sei-table--candidates td.sei-td-main { width: 36%; }
+    }
+    .sei-name { font-weight: 500; color: var(--text-primary); overflow-wrap: anywhere; }
+    .sei-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; overflow-wrap: anywhere; }
+    /* Subtitle is built from segments. Desktop: "account · category". Phone: date, last four and category as
+       unbreakable chunks spaced by a gap, so a wrap can never split a card number or strand a leading dot. */
+    .sei-meta-date, .sei-acct-short { display: none; }
+    /* Literal dot, not a `\00b7` escape: CSS eats the whitespace that follows any hex escape. */
+    .sei-meta-cat::before { content: ' · '; white-space: pre; }
+    .sei-tag-pill {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: var(--accent-subtle);
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 4px;
+    }
+    .sei-diff {
+      margin-top: 6px;
+      padding: 6px 10px;
+      border-radius: 8px;
+      background: var(--warning-soft);
+      color: var(--text-primary);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .sei-banner {
+      padding: 12px 14px;
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-primary);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .sei-banner--error {
+      border-color: color-mix(in oklch, var(--danger) 40%, var(--border-primary));
+      background: var(--danger-soft);
+    }
+    .sei-banner--notice {
+      background: var(--bg-secondary);
+      font-size: 12.5px;
+      color: var(--text-secondary);
+    }
+    .sei-empty { padding: 26px 16px; text-align: center; color: var(--text-muted); font-size: 13.5px; }
+    .sei-link {
+      background: none;
+      border: none;
+      padding: 4px 2px;
+      font: inherit;
+      font-size: 12.5px;
+      color: var(--info);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    /* Correlation: a compact banner with an accent bar. A pill radius on three wrapped lines looked broken. */
+    .sei-corr-stack { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+    .sei-corr {
+      --c: var(--text-muted);
+      max-width: 100%;
+      padding: 6px 10px;
+      border-radius: 10px;
+      border-left: 3px solid var(--c);
+      background: color-mix(in oklch, var(--c) 13%, transparent);
+      font-size: 12px;
+      line-height: 1.4;
+      color: var(--text-primary);
+      overflow-wrap: anywhere;
+    }
+    .sei-corr--warn { --c: var(--warning); }
+    .sei-corr--info { --c: var(--info); }
+    .sei-corr--ok { --c: var(--success); }
+    .sei-corr-title { font-weight: 600; }
+    .sei-corr-sub { margin-top: 1px; color: var(--text-muted); font-size: 11.5px; }
+    .sei-corr-actions { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 3px; }
+    .sei-corr-actions .sei-link { padding: 2px 0; font-size: 12px; }
+
+    /* Inline 2-click Replace preview & target picker tray */
+    .sei-tray-row:hover { background: transparent !important; }
+    .sei-tray-cell {
+      padding: 0 12px 12px !important;
+      background: color-mix(in oklch, var(--accent) 7%, transparent);
+    }
+    .sei-tray {
+      padding: 12px 14px;
+      border-radius: 10px;
+      border: 1px solid color-mix(in oklch, var(--accent) 42%, var(--border-primary));
+      background: var(--bg-card);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .sei-tray-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 6px 12px;
+    }
+    .sei-tray-title { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+    .sei-tray-kept { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+    .sei-tray-links { display: inline-flex; align-items: center; gap: 10px; }
+    .sei-diff-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 18px;
+      padding: 8px 11px;
+      border-radius: 8px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-faint);
+      font-size: 12.5px;
+      font-variant-numeric: tabular-nums;
+    }
+    .sei-diff-lbl { color: var(--text-muted); margin-right: 4px; }
+    .sei-strike { color: var(--text-muted); text-decoration: line-through; }
+    .sei-split-notice {
+      padding: 8px 11px;
+      border-radius: 8px;
+      border-left: 3px solid var(--warning);
+      background: color-mix(in oklch, var(--warning) 13%, transparent);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .sei-split-notice-title { font-weight: 600; color: var(--text-primary); }
+    .sei-split-notice-sub { color: var(--text-secondary); margin-top: 2px; font-variant-numeric: tabular-nums; }
+    .sei-tray-foot {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .sei-picker-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 220px;
+      overflow-y: auto;
+    }
+    .sei-picker-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      width: 100%;
+      text-align: left;
+      padding: 8px 11px;
+      border-radius: 8px;
+      border: 1px solid var(--border-primary);
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      font: inherit;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .sei-picker-item:hover {
+      border-color: color-mix(in oklch, var(--accent) 55%, var(--border-primary));
+      background: var(--bg-hover);
+    }
+    .sei-picker-item--active {
+      border-color: var(--accent);
+      background: color-mix(in oklch, var(--accent) 10%, var(--bg-secondary));
+    }
+    .sei-picker-name { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+    .sei-picker-meta { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+    /* Desktop only: ghost action buttons carry their own padding, so pull them back so the first label
+       lines up with the ACTIONS column header above it. */
+    @media (min-width: 721px) {
+      .sei-table--imports td.sei-imp-act .trek-cluster { margin-left: -12px; }
+    }
+
+    /* Mobile / narrow viewports (<= 720px, incl. iPhone SE 375px & iPhone 15 393px) */
+    @media (max-width: 720px) {
+      .sei-shell {
+        padding: 10px 12px calc(18px + var(--trek-inset-bottom, 0px));
+        gap: 12px;
+      }
+      .sei-h1 { font-size: 18px; }
+      .sei-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+      .sei-field--wide { grid-column: 1 / -1; }
+      /* Chrome's native date control needs the horizontal padding back for dd/mm/yyyy + picker icon. */
+      input[type="date"].sei-ctrl { padding-left: 6px; padding-right: 2px; }
+
+      .sei-table-wrap { overflow-x: hidden; }
+      table.sei-table, .sei-table tbody { display: block; width: 100%; }
+      .sei-table thead { display: none; }
+
+      .sei-table--candidates tbody tr.sei-cand-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "main amt"
+          "meta meta"
+          "guard guard"
+          "acts acts";
+        column-gap: 10px;
+        row-gap: 4px;
+        padding: 12px;
+        border-bottom: 1px solid var(--border-faint);
+        align-items: baseline;
+      }
+      .sei-table--candidates tbody tr.sei-cand-row.sei-row-open { border-bottom: none; padding-bottom: 8px; }
+      .sei-table--candidates tbody tr:last-child { border-bottom: none; }
+      .sei-table--candidates td { padding: 0; border: none; }
+      /* The cell dissolves so the title can sit beside the amount while the subtitle spans under both. */
+      .sei-table--candidates td.sei-td-main { display: contents; }
+      .sei-td-main > .sei-name { grid-area: main; min-width: 0; }
+      .sei-table--candidates td.sei-td-amt  { grid-area: amt; }
+      .sei-table--candidates td.sei-td-date { display: none; }
+      .sei-td-main .sei-meta { grid-area: meta; display: flex; flex-wrap: wrap; gap: 0 10px; }
+      .sei-meta-date, .sei-acct-short { display: block; }
+      .sei-acct-full { display: none; }
+      .sei-meta-date, .sei-acct-short, .sei-meta-cat { white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+      .sei-meta-cat::before { content: none; }
+      .sei-table--candidates td.sei-td-guard { grid-area: guard; margin-top: 3px; }
+      /* The cell stays in the DOM on desktop so row borders span the table; on a phone an empty one is just a gap. */
+      .sei-table--candidates td.sei-td-guard:empty { display: none; }
+      .sei-table--candidates td.sei-td-acts { grid-area: acts; justify-self: end; margin-top: 4px; }
+      .sei-table--candidates tbody tr.sei-tray-row {
+        display: block;
+        border-bottom: 1px solid var(--border-faint);
+      }
+      .sei-tray-cell { display: block; padding: 0 12px 12px !important; }
+      .sei-picker-item { flex-direction: column; align-items: flex-start; gap: 2px; }
+      .sei-table--imports tbody tr {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          "imain iamt"
+          "idate istat"
+          "iact  iact";
+        column-gap: 10px;
+        row-gap: 6px;
+        padding: 12px;
+        border-bottom: 1px solid var(--border-faint);
+        align-items: baseline;
+      }
+      .sei-table--imports tbody tr:last-child { border-bottom: none; }
+      .sei-table--imports td { padding: 0; border: none; }
+      .sei-table--imports td.sei-imp-main { grid-area: imain; min-width: 0; }
+      .sei-table--imports td.sei-imp-amt  { grid-area: iamt; }
+      .sei-table--imports td.sei-imp-date { grid-area: idate; font-size: 12px; color: var(--text-muted); }
+      .sei-table--imports td.sei-imp-stat { grid-area: istat; justify-self: end; }
+      .sei-table--imports td.sei-imp-act  { grid-area: iact; padding-top: 2px; }
+    }
+
+    /* Phone date range: iOS renders `13 Dec 2026` wider than a half-width cell and its native date
+       control ignores width:100%, so two side-by-side inputs overlapped. One form row each instead —
+       label left, value right, hairline between, exactly like a native grouped list. */
+    @media (max-width: 480px) {
+      .sei-h1 { font-size: 17px; }
+      .sei-header .trek-title { font-size: 11px; }
+      /* Native pickers reserve room for their chevron; without this "All categories" clips at 375px. */
+      select.sei-ctrl { padding-left: 8px; padding-right: 2px; }
+      .sei-field--date {
+        grid-column: 1 / -1;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--border-faint);
+        overflow: hidden;
+      }
+      .sei-field--date .sei-field-lbl { flex: none; }
+      .sei-field--date > .sei-ctrl {
+        width: auto;
+        flex: 0 0 auto;
+        max-width: 66%;
+        border: none;
+        background: transparent;
+        box-shadow: none;
+        padding: 0;
+        text-align: right;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="sei-scroll trek-scroll" id="scroll-root">
+    <div class="sei-shell trek-page-enter" id="app">
+      <div class="trek-glass trek-stack">
+        <div class="sei-header">
+          <div>
+            <div class="trek-title sei-brand"><img class="sei-brand-mark" src="sure-logomark.svg" alt="" width="20" height="18"><span>Sure Sync</span></div>
+            <h1 class="sei-h1" id="trip-title">Loading trip&hellip;</h1>
+            <p class="sei-sub" id="trip-meta">Waiting for trip context&hellip;</p>
+          </div>
+          <div class="trek-cluster">
+            <button class="trek-btn trek-btn--secondary sei-btn-sm" id="reload-btn" type="button">Refresh</button>
+          </div>
+        </div>
+        <div class="sei-tabs" role="tablist" aria-label="Sure expense views">
+          <button type="button" class="sei-tab" role="tab" id="tab-btn-find" aria-selected="true" aria-controls="tab-find">Find in Sure</button>
+          <button type="button" class="sei-tab" role="tab" id="tab-btn-imported" aria-selected="false" aria-controls="tab-imported">Imported</button>
+        </div>
+        <div id="error-box" hidden></div>
+      </div>
+
+      <div id="tab-find" role="tabpanel" aria-labelledby="tab-btn-find" class="trek-card trek-stack">
+        <div class="sei-filter-grid">
+          <label class="sei-field sei-field--date">
+            <span class="sei-field-lbl">From</span>
+            <input type="date" class="trek-input sei-ctrl" id="from-date" />
+          </label>
+          <label class="sei-field sei-field--date">
+            <span class="sei-field-lbl">To</span>
+            <input type="date" class="trek-input sei-ctrl" id="to-date" />
+          </label>
+          <label class="sei-field">
+            <span class="sei-field-lbl">Sure Category</span>
+            <select class="trek-select sei-ctrl" id="cat-select" data-trek-native>
+              <option value="">All categories</option>
+              <option value="Uncategorized">Uncategorized</option>
+            </select>
+          </label>
+          <label class="sei-field">
+            <span class="sei-field-lbl">Sure Tag</span>
+            <select class="trek-select sei-ctrl" id="tag-select" data-trek-native>
+              <option value="">All tags</option>
+            </select>
+          </label>
+          <label class="sei-field sei-field--wide">
+            <span class="sei-field-lbl">Search</span>
+            <input class="trek-input sei-ctrl" id="search-input" type="search" placeholder="Merchant or name&hellip;" />
+          </label>
+        </div>
+
+        <div class="sei-meta" id="candidates-summary">Defaults to this trip's dates &mdash; widen either end to catch pre-booked flights and hotels.</div>
+
+        <div id="candidates-wrap">
+          <div class="sei-table-wrap"><div class="sei-empty">Loading candidate transactions&hellip;</div></div>
+        </div>
+      </div>
+
+      <div id="tab-imported" role="tabpanel" aria-labelledby="tab-btn-imported" class="trek-card trek-stack">
+        <div class="sei-header">
+          <div>
+            <div class="trek-title">Imported Into This Trip</div>
+            <div class="sei-meta">One-way from Sure: unmapped TREK costs are untouched unless you explicitly replace one.</div>
+          </div>
+          <span class="trek-chip" id="imports-count-chip">0 imported</span>
+        </div>
+        <div class="sei-banner sei-banner--notice" id="window-notice" hidden></div>
+        <div class="sei-table-wrap" id="imports-wrap">
+          <div class="sei-empty">No transactions imported into this trip yet.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var state = {
+        tripId: null,
+        trip: null,
+        actingUserId: null,
+        tab: 'find',
+        candidates: [],
+        replaceableTargets: [],
+        imports: [],
+        lookupInfo: null,
+        sureCategories: [],
+        sureTags: [],
+        filtersInitialized: false,
+        startDate: '',
+        endDate: '',
+        allDates: false,
+        category: '',
+        tag: '',
+        search: '',
+        replaceDraft: null, // { txId, targetId, pickingTarget }
+        busyTxId: null,
+        loadingCandidates: false,
+      };
+      var searchTimer = null;
+
+      function qsTripId() {
+        try {
+          var p = new URLSearchParams(window.location.search);
+          return p.get('tripId');
+        } catch (e) {
+          return null;
+        }
+      }
+
+      function esc(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
+      }
+
+      function fmtAmt(n, cur) {
+        var num = Number(n);
+        var val = Number.isFinite(num) ? num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : String(n);
+        return cur ? (val + ' ' + cur) : val;
+      }
+
+      function shortCardName(raw) {
+        var s = String(raw || '').trim();
+        if (!s) return 'Sure account';
+        return s.replace(/-\s*(\d{4})\s*\(\1\)$/, ' ($1)');
+      }
+
+      function acctLastFour(raw) {
+        var m = /\((\d{4})\)\s*$/.exec(String(raw || ''));
+        return m ? ('\u2022\u2022\u2022\u2022 ' + m[1]) : shortCardName(raw);
+      }
+
+      function showError(err) {
+        var box = document.getElementById('error-box');
+        if (!err) {
+          box.hidden = true;
+          box.innerHTML = '';
+          return;
+        }
+        var msg = (err && err.message) || String(err);
+        box.hidden = false;
+        box.className = 'sei-banner sei-banner--error';
+        box.innerHTML = '<strong>Action blocked</strong><span>' + esc(msg) + '</span>';
+      }
+
+      function setTab(tab) {
+        state.tab = tab;
+        var isFind = tab === 'find';
+        document.getElementById('tab-btn-find').setAttribute('aria-selected', isFind ? 'true' : 'false');
+        document.getElementById('tab-btn-imported').setAttribute('aria-selected', isFind ? 'false' : 'true');
+        document.getElementById('tab-find').hidden = !isFind;
+        document.getElementById('tab-imported').hidden = isFind;
+        if (!isFind) loadImportsOnly();
+      }
+
+      function renderTabLabels() {
+        var imported = state.imports.length;
+        document.getElementById('tab-btn-imported').textContent = imported > 0 ? ('Imported (' + imported + ')') : 'Imported';
+      }
+
+      function syncFilterControls(applied) {
+        if (applied && !state.filtersInitialized) {
+          state.startDate = applied.startDate || '';
+          state.endDate = applied.endDate || '';
+          state.allDates = Boolean(applied.allDates);
+          state.filtersInitialized = true;
+        }
+        document.getElementById('from-date').value = state.startDate;
+        document.getElementById('to-date').value = state.endDate;
+      }
+
+      function populateDropdowns(categories, tags) {
+        var catSel = document.getElementById('cat-select');
+        var curCat = state.category;
+        var catHtml = '<option value="">All categories</option><option value="Uncategorized"' +
+          (curCat === 'Uncategorized' ? ' selected' : '') + '>Uncategorized</option>';
+        for (var i = 0; i < categories.length; i++) {
+          var c = categories[i];
+          var sel = c.name === curCat ? ' selected' : '';
+          catHtml += '<option value="' + esc(c.name) + '"' + sel + '>' + esc(c.label || c.name) + '</option>';
+        }
+        catSel.innerHTML = catHtml;
+
+        var tagSel = document.getElementById('tag-select');
+        var curTag = state.tag;
+        var tagHtml = '<option value="">All tags</option>';
+        for (var j = 0; j < tags.length; j++) {
+          var t = tags[j];
+          var tSel = t.name === curTag ? ' selected' : '';
+          tagHtml += '<option value="' + esc(t.name) + '"' + tSel + '>#' + esc(t.name) + '</option>';
+        }
+        tagSel.innerHTML = tagHtml;
+      }
+
+      // Exact match of server rescaleCustomShares (Hamilton largest-remainder in integer cents).
+      function rescaleSharesClient(shares, newTotal) {
+        var rounded = Math.round((Number(newTotal) + Number.EPSILON) * 100) / 100;
+        var totalCents = Math.round(rounded * 100);
+        if (!Array.isArray(shares) || shares.length === 0) return [];
+        var rawCents = shares.map(function (s) { return s.ratio * totalCents; });
+        var floored = rawCents.map(function (c) { return Math.floor(c + 1e-9); });
+        var rem = totalCents - floored.reduce(function (a, b) { return a + b; }, 0);
+        var order = shares
+          .map(function (s, idx) { return { idx: idx, frac: rawCents[idx] - floored[idx], weight: s.ratio }; })
+          .sort(function (a, b) { return (b.frac - a.frac) || (b.weight - a.weight) || (a.idx - b.idx); });
+        for (var k = 0; k < order.length && rem > 0; k++, rem--) {
+          floored[order[k].idx] += 1;
+        }
+        return shares.map(function (s, idx) {
+          return {
+            user_id: s.user_id,
+            username: s.username,
+            beforeAmount: s.beforeAmount,
+            pct: s.pct,
+            afterAmount: floored[idx] / 100,
+          };
+        });
+      }
+
+      function daysGapClient(ymdA, ymdB) {
+        if (!ymdA || !ymdB) return null;
+        var a = Date.parse(ymdA + 'T00:00:00Z');
+        var b = Date.parse(ymdB + 'T00:00:00Z');
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        return Math.abs(Math.round((a - b) / 86400000));
+      }
+
+      function rankTargetsForCandidate(cand, targets) {
+        var suggestedId = cand.replaceSuggestion ? cand.replaceSuggestion.targetId : null;
+        var claimedByOthers = new Set();
+        for (var k = 0; k < state.candidates.length; k++) {
+          var oc = state.candidates[k];
+          if (oc.id !== cand.id && oc.replaceSuggestion && oc.replaceSuggestion.targetId) {
+            claimedByOthers.add(oc.replaceSuggestion.targetId);
+          }
+        }
+        var cWords = String(cand.name || '').toLowerCase().split(/[^a-z0-9]+/).filter(function (w) { return w.length >= 3; });
+        return targets.slice().sort(function (a, b) {
+          function score(t) {
+            var s = (suggestedId && t.id === suggestedId) ? 1000 : (claimedByOthers.has(t.id) ? -25 : 0);
+            var tLower = String(t.name || '').toLowerCase();
+            for (var i = 0; i < cWords.length; i++) {
+              if (tLower.indexOf(cWords[i]) !== -1) s += 40;
+            }
+            if (t.category && cand.trekCategory && t.category.toLowerCase() === cand.trekCategory.toLowerCase()) {
+              s += 20;
+            }
+            var gap = daysGapClient(cand.date, t.expense_date);
+            if (gap === null) s += 12;
+            else if (gap === 0) s += 25;
+            else if (gap <= 2) s += 18;
+            else if (gap <= 7) s += 8;
+            if (Number(t.total_price) === 0) {
+              s += 15;
+            } else if (cand.approxTripAmount != null && t.approxTripAmount != null && t.approxTripAmount > 0) {
+              var rel = Math.abs(cand.approxTripAmount - t.approxTripAmount) / Math.max(cand.approxTripAmount, t.approxTripAmount);
+              if (rel <= 0.1) s += 30;
+              else if (rel <= 0.35) s += 18;
+              else if (rel <= 0.6) s += 8;
+            } else if (t.currency === cand.currency && t.total_price > 0) {
+              var sRel = Math.abs(cand.amount - t.total_price) / Math.max(cand.amount, t.total_price);
+              if (sRel <= 0.1) s += 30;
+              else if (sRel <= 0.35) s += 18;
+            }
+            return s;
+          }
+          return (score(b) - score(a)) || String(a.name).localeCompare(String(b.name));
+        });
+      }
+
+      function renderHeader() {
+        var t = state.trip;
+        if (!t) return;
+        document.getElementById('trip-title').textContent = t.title || ('Trip #' + t.id);
+        document.getElementById('trip-meta').innerHTML =
+          '<span>' + esc(t.startDate) + ' \u2192 ' + esc(t.endDate) + '</span>' +
+          (t.currency ? ('<span>Trip base ' + esc(t.currency) + '</span>') : '');
+      }
+
+      function corrBlock(kind, title, sub, actionsHtml) {
+        return '<div class="sei-corr sei-corr--' + kind + '"><div>' + title + '</div>' +
+          (sub ? ('<div class="sei-corr-sub">' + sub + '</div>') : '') +
+          (actionsHtml ? ('<div class="sei-corr-actions">' + actionsHtml + '</div>') : '') + '</div>';
+      }
+
+      function buildCorrelationHtml(c, targetById, isMatchedSection) {
+        var parts = [];
+
+        if (c.mappedInOtherTrip) {
+          parts.push(corrBlock('muted', '<span class="sei-corr-title">Already imported in another trip</span>', '', ''));
+        } else if (isMatchedSection && c.replaceSuggestion) {
+          var rs = c.replaceSuggestion;
+          var tgt = targetById.get(rs.targetId);
+          if (tgt) {
+            var subBits = [fmtAmt(tgt.total_price, tgt.currency) + ' est.'];
+            if (tgt.expense_date) subBits.push(tgt.expense_date);
+            if (rs.reason) subBits.push(rs.reason);
+            parts.push(corrBlock(
+              rs.confidence === 'strong' ? 'warn' : 'info',
+              '<span class="sei-corr-title">Matches estimate</span> \u00b7 ' + esc(tgt.name),
+              esc(subBits.join(' \u00b7 ')),
+              '<button type="button" class="sei-link" data-open-costs="' + esc(tgt.id) + '">View in Costs</button>'
+            ));
+          }
+        } else if (c.duplicateOf) {
+          var d = c.duplicateOf;
+          parts.push(corrBlock(
+            'warn',
+            '<span class="sei-corr-title">' + (d.isMapped ? 'Matches synced cost' : 'Matches cost') + '</span> \u00b7 ' + esc(d.name),
+            esc(fmtAmt(d.total_price, d.currency)) + (d.reason ? (' \u00b7 ' + esc(d.reason)) : ''),
+            '<button type="button" class="sei-link" data-open-costs="' + esc(d.id) + '">View in Costs</button>'
+          ));
+        } else if (c.costHint) {
+          var h = c.costHint;
+          parts.push(corrBlock(
+            'info',
+            '<span class="sei-corr-title">Similar cost</span> \u00b7 ' + esc(h.name),
+            esc(fmtAmt(h.total_price, h.currency)),
+            '<button type="button" class="sei-link" data-open-costs="' + esc(h.id) + '">View</button>'
+          ));
+        }
+
+        if (!c.mappedInOtherTrip && c.planMatch) {
+          var pm = c.planMatch;
+          parts.push(corrBlock(
+            'ok',
+            '<span class="sei-corr-title">' + (pm.kind === 'place' ? 'Trip place' : 'Trip booking') + '</span> \u00b7 ' + esc(pm.title),
+            '',
+            ''
+          ));
+        }
+
+        if (parts.length === 0) return '';
+        return '<div class="sei-corr-stack">' + parts.join('') + '</div>';
+      }
+
+      function buildKeptSummary(target) {
+        var kept = ['title'];
+        if (target.category) kept.push('category (' + target.category + ')');
+        if (target.hasReservation) kept.push('booking link');
+        if (target.hasPlace) kept.push('place link');
+        if (target.hasNote) kept.push('notes');
+        if (target.receiptCount > 0) kept.push(target.receiptCount + ' receipt' + (target.receiptCount === 1 ? '' : 's'));
+        if (target.split && target.split.kind === 'equal') kept.push('equal split (' + target.split.memberCount + ')');
+        return 'Keeps ' + kept.join(', ') + '.';
+      }
+
+      function buildReplaceTrayHtml(c, targetById) {
+        var draft = state.replaceDraft;
+        if (!draft || draft.txId !== c.id) return '';
+        var target = draft.targetId ? targetById.get(draft.targetId) : null;
+        var ranked = rankTargetsForCandidate(c, state.replaceableTargets);
+        var isBusy = state.busyTxId === c.id;
+
+        if (!target || draft.pickingTarget) {
+          var listHtml = '';
+          for (var i = 0; i < ranked.length; i++) {
+            var t = ranked[i];
+            var isSuggested = c.replaceSuggestion && c.replaceSuggestion.targetId === t.id;
+            var isCur = target && target.id === t.id;
+            var metaBits = [fmtAmt(t.total_price, t.currency)];
+            metaBits.push(t.expense_date || 'no date');
+            if (t.split && t.split.kind === 'custom') metaBits.push('uneven split');
+            else if (t.split && t.split.kind === 'equal') metaBits.push('split (' + t.split.memberCount + ')');
+            listHtml += '<button type="button" class="sei-picker-item' + (isCur ? ' sei-picker-item--active' : '') +
+              '" data-choose-target="' + esc(t.id) + '" data-for-tx="' + esc(c.id) + '">' +
+              '<span class="sei-picker-name">' + esc(t.name) +
+              (isSuggested ? ' <span class="sei-tag-pill">Suggested</span>' : '') + '</span>' +
+              '<span class="sei-picker-meta">' + esc(metaBits.join(' \u00b7 ')) + '</span></button>';
+          }
+          return '<tr class="sei-tray-row"><td colspan="5" class="sei-tray-cell"><div class="sei-tray">' +
+            '<div class="sei-tray-top">' +
+            '<div class="sei-tray-title">Pick which unmapped trip cost to replace with ' + esc(fmtAmt(c.amount, c.currency)) + ':</div>' +
+            '<div class="sei-tray-links">' +
+            (target
+              ? '<button type="button" class="sei-link" data-back-preview="' + esc(c.id) + '">Back to preview</button>'
+              : '<button type="button" class="sei-link" data-close-replace="' + esc(c.id) + '">Cancel</button>') +
+            '</div></div>' +
+            '<div class="sei-picker-list">' + listHtml + '</div>' +
+            '</div></td></tr>';
+        }
+
+        var splitHtml = '';
+        if (target.split && target.split.kind === 'custom' && target.split.shares.length > 0) {
+          var rescaled = rescaleSharesClient(target.split.shares, c.amount);
+          var ratioLbl = rescaled.map(function (s) {
+            return (Math.round(s.pct * 10) % 10 === 0 ? Math.round(s.pct) : s.pct.toFixed(1)) + '%';
+          }).join(' / ');
+          var shareLines = rescaled.map(function (s) {
+            return esc(s.username) + ': ' + esc(fmtAmt(s.beforeAmount, target.currency)) + ' \u2192 <strong>' +
+              esc(fmtAmt(s.afterAmount, c.currency)) + '</strong>';
+          }).join(' &nbsp;\u00b7&nbsp; ');
+          splitHtml = '<div class="sei-split-notice">' +
+            '<div class="sei-split-notice-title">Uneven split notice \u2014 keeping ' + esc(ratioLbl) + ' ratio on ' + esc(fmtAmt(c.amount, c.currency)) + '</div>' +
+            '<div class="sei-split-notice-sub">' + shareLines + '</div></div>';
+        }
+
+        var otherPayers = (target.payers || []).filter(function (p) {
+          return state.actingUserId != null && p.user_id !== state.actingUserId;
+        });
+        var payerDiffHtml = '';
+        if (otherPayers.length > 0) {
+          var pNames = otherPayers.map(function (p) { return p.username || ('User #' + p.user_id); }).join(', ');
+          payerDiffHtml = '<span><span class="sei-diff-lbl">Payer:</span><span class="sei-strike">' + esc(pNames) +
+            '</span> &rarr; <strong>your card</strong></span>';
+        }
+
+        return '<tr class="sei-tray-row"><td colspan="5" class="sei-tray-cell"><div class="sei-tray">' +
+          '<div class="sei-tray-top"><div>' +
+          '<div class="sei-tray-title">Replace \u201c' + esc(target.name) + '\u201d</div>' +
+          '<div class="sei-tray-kept">' + esc(buildKeptSummary(target)) + '</div></div>' +
+          '<div class="sei-tray-links">' +
+          (state.replaceableTargets.length > 1
+            ? '<button type="button" class="sei-link" data-reopen-picker="' + esc(c.id) + '">Pick another item &#9662;</button>'
+            : '') +
+          '<button type="button" class="sei-link" data-open-costs="' + esc(target.id) + '">View in Costs</button>' +
+          '</div></div>' +
+          '<div class="sei-diff-row">' +
+          '<span><span class="sei-diff-lbl">Amount:</span><span class="sei-strike">' + esc(fmtAmt(target.total_price, target.currency)) +
+          '</span> &rarr; <strong>' + esc(fmtAmt(c.amount, c.currency)) + '</strong></span>' +
+          '<span><span class="sei-diff-lbl">Date:</span>' + esc(target.expense_date || 'no date') +
+          ' &rarr; <strong>' + esc(c.date) + '</strong></span>' +
+          payerDiffHtml +
+          '</div>' +
+          splitHtml +
+          '<div class="sei-tray-foot">' +
+          '<button type="button" class="trek-btn trek-btn--ghost sei-btn-sm" data-close-replace="' + esc(c.id) + '"' + (isBusy ? ' disabled' : '') + '>Cancel</button>' +
+          '<button type="button" class="trek-btn trek-btn--primary sei-btn-sm" data-confirm-replace="' + esc(c.id) + '"' + (isBusy ? ' disabled' : '') + '>' +
+          (isBusy ? 'Replacing\u2026' : 'Confirm replace') + '</button>' +
+          '</div></div></td></tr>';
+      }
+
+      function buildCandidateTableHtml(rows, targetById, isMatchedSection) {
+        var hasTargets = state.replaceableTargets.length > 0;
+        var html = '<table class="sei-table sei-table--candidates"><thead><tr>' +
+          '<th>Date</th>' +
+          '<th>Merchant / Account</th>' +
+          '<th>Match / Context</th>' +
+          '<th class="sei-num">Amount</th>' +
+          '<th class="sei-act-col">Actions</th>' +
+          '</tr></thead><tbody>';
+
+        for (var i = 0; i < rows.length; i++) {
+          var c = rows[i];
+          var isOpen = Boolean(state.replaceDraft && state.replaceDraft.txId === c.id);
+          var isBusy = state.busyTxId === c.id;
+          var anyBusy = Boolean(state.busyTxId);
+          var rowClass = 'sei-cand-row' + (c.mappedInOtherTrip ? ' sei-row-muted' : '') + (isOpen ? ' sei-row-open' : '');
+
+          var tagsHtml = '';
+          if (Array.isArray(c.tags) && c.tags.length > 0) {
+            for (var k = 0; k < c.tags.length; k++) {
+              tagsHtml += '<span class="sei-tag-pill">#' + esc(c.tags[k]) + '</span>';
+            }
+          }
+
+          var actsHtml = '';
+          if (c.mappedInOtherTrip) {
+            actsHtml = '<span class="sei-meta">Already imported in another trip</span>';
+          } else if (isMatchedSection) {
+            actsHtml = '<div class="sei-row-acts">' +
+              (isOpen
+                ? '<button type="button" class="trek-btn trek-btn--ghost sei-act-btn sei-act-btn--sub" data-close-replace="' + esc(c.id) + '"' + (anyBusy ? ' disabled' : '') + '>Cancel</button>'
+                : '<button type="button" class="trek-btn trek-btn--primary sei-act-btn" data-open-replace="' + esc(c.id) + '"' + (anyBusy ? ' disabled' : '') + '>Replace&hellip;</button>') +
+              '<button type="button" class="trek-btn trek-btn--ghost sei-act-btn sei-act-btn--sub" data-add-id="' + esc(c.id) + '"' + (anyBusy ? ' disabled' : '') + '>' +
+              (isBusy && !isOpen ? 'Adding\u2026' : '+ New') + '</button></div>';
+          } else {
+            actsHtml = '<div class="sei-row-acts">' +
+              '<button type="button" class="trek-btn trek-btn--primary sei-act-btn" data-add-id="' + esc(c.id) + '"' + (anyBusy ? ' disabled' : '') + '>' +
+              (isBusy && !isOpen ? 'Adding\u2026' : '+ Add') + '</button>' +
+              (hasTargets
+                ? (isOpen
+                  ? '<button type="button" class="trek-btn trek-btn--ghost sei-act-btn sei-act-btn--sub" data-close-replace="' + esc(c.id) + '"' + (anyBusy ? ' disabled' : '') + '>Cancel</button>'
+                  : '<button type="button" class="trek-btn trek-btn--ghost sei-act-btn sei-act-btn--sub" data-pick-replace="' + esc(c.id) + '"' + (anyBusy ? ' disabled' : '') + '>Replace &#9662;</button>')
+                : '') +
+              '</div>';
+          }
+
+          var corrHtml = buildCorrelationHtml(c, targetById, isMatchedSection);
+          html += '<tr class="' + rowClass + '">' +
+            '<td class="sei-td-date" style="white-space:nowrap">' + esc(c.date) + '</td>' +
+            '<td class="sei-td-main"><div class="sei-name">' + esc(c.name) + tagsHtml + '</div>' +
+            '<div class="sei-meta"><span class="sei-meta-date">' + esc(c.date) + '</span>' +
+            '<span class="sei-acct-full">' + esc(shortCardName(c.account)) + '</span>' +
+            '<span class="sei-acct-short">' + esc(acctLastFour(c.account)) + '</span>' +
+            (c.category ? ('<span class="sei-meta-cat">' + esc(c.category) + '</span>') : '') + '</div></td>' +
+            '<td class="sei-td-guard">' + corrHtml + '</td>' +
+            '<td class="sei-num sei-td-amt"><div class="sei-name">' + esc(fmtAmt(c.amount, c.currency)) + '</div></td>' +
+            '<td class="sei-td-acts">' + actsHtml + '</td>' +
+            '</tr>' +
+            buildReplaceTrayHtml(c, targetById);
+        }
+        html += '</tbody></table>';
+        return html;
+      }
+
+      async function handleAddSingle(candId) {
+        if (state.busyTxId || !state.tripId) return;
+        var cand = state.candidates.find(function (x) { return x.id === candId; });
+        if (!cand || cand.mappedInOtherTrip) return;
+
+        var needsOverride = Boolean(cand.duplicateOf);
+        if (needsOverride) {
+          var d = cand.duplicateOf;
+          var ok = await trek.confirm({
+            title: 'Add as a separate trip cost?',
+            message: '"' + cand.name + '" (' + fmtAmt(cand.amount, cand.currency) + ' on ' + cand.date + ') closely matches "' +
+              d.name + '" (' + fmtAmt(d.total_price, d.currency) + (d.expense_date ? (' on ' + d.expense_date) : '') + '). ' +
+              (d.isMapped
+                ? 'That cost is already synced from Sure. Add a separate item anyway?'
+                : 'Add as a separate cost instead of replacing "' + d.name + '"?'),
+            confirmLabel: 'Add as new',
+            cancelLabel: 'Cancel',
+          });
+          if (!ok) return;
+        }
+
+        state.busyTxId = cand.id;
+        state.replaceDraft = null;
+        renderCandidates();
+        showError(null);
+        try {
+          await trek.invoke('/import', {
+            method: 'POST',
+            body: {
+              tripId: Number(state.tripId),
+              transactionIds: [cand.id],
+              selectionDates: cand.date ? [cand.date] : [],
+              overrideDuplicateIds: needsOverride ? [cand.id] : [],
+              filters: {
+                startDate: state.startDate,
+                endDate: state.endDate,
+                allDates: state.allDates,
+                search: state.search,
+                category: state.category,
+                tag: state.tag,
+              },
+            },
+          });
+          trek.notify('success', 'Added "' + cand.name + '" (' + fmtAmt(cand.amount, cand.currency) + ') to trip costs.');
+          await loadAll();
+        } catch (err) {
+          showError(err);
+          trek.notify('error', err.message || 'Add failed.');
+        } finally {
+          state.busyTxId = null;
+          renderCandidates();
+        }
+      }
+
+      async function handleConfirmReplace(candId) {
+        var draft = state.replaceDraft;
+        if (state.busyTxId || !state.tripId || !draft || draft.txId !== candId || !draft.targetId) return;
+        var cand = state.candidates.find(function (x) { return x.id === candId; });
+        if (!cand) return;
+
+        state.busyTxId = cand.id;
+        renderCandidates();
+        showError(null);
+        try {
+          var res = await trek.invoke('/imports/replace', {
+            method: 'POST',
+            body: {
+              tripId: Number(state.tripId),
+              transactionId: cand.id,
+              budgetItemId: Number(draft.targetId),
+              selectionDate: cand.date || null,
+              filters: {
+                startDate: state.startDate,
+                endDate: state.endDate,
+                allDates: state.allDates,
+                search: state.search,
+                category: state.category,
+                tag: state.tag,
+              },
+            },
+          });
+          state.replaceDraft = null;
+          trek.notify(
+            'success',
+            'Updated "' + (res.name || cand.name) + '" (' + fmtAmt(res.beforeAmount, res.beforeCurrency) +
+              ' \u2192 ' + fmtAmt(res.totalPrice, res.itemCurrency) + ').'
+          );
+          await loadAll();
+        } catch (err) {
+          showError(err);
+          trek.notify('error', err.message || 'Replace failed.');
+        } finally {
+          state.busyTxId = null;
+          renderCandidates();
+        }
+      }
+
+      function renderCandidates() {
+        var wrap = document.getElementById('candidates-wrap');
+        var rows = state.candidates;
+        var summary = document.getElementById('candidates-summary');
+        var winDesc = (state.startDate || state.endDate)
+          ? ((state.startDate || '\u2026') + ' \u2192 ' + (state.endDate || '\u2026'))
+          : 'all dates';
+
+        var targetById = new Map();
+        for (var t = 0; t < state.replaceableTargets.length; t++) {
+          targetById.set(state.replaceableTargets[t].id, state.replaceableTargets[t]);
+        }
+
+        if (state.replaceDraft) {
+          var stillCand = rows.some(function (c) { return c.id === state.replaceDraft.txId; });
+          var validTarget = !state.replaceDraft.targetId || targetById.has(state.replaceDraft.targetId);
+          if (!stillCand || !validTarget || state.replaceableTargets.length === 0) {
+            state.replaceDraft = null;
+          }
+        }
+
+        var matchedRows = [];
+        var otherRows = [];
+        for (var i = 0; i < rows.length; i++) {
+          var r = rows[i];
+          if (!r.mappedInOtherTrip && r.replaceSuggestion && targetById.has(r.replaceSuggestion.targetId)) {
+            matchedRows.push(r);
+          } else {
+            otherRows.push(r);
+          }
+        }
+        matchedRows.sort(function (a, b) {
+          return (b.replaceSuggestion.score - a.replaceSuggestion.score) ||
+            b.date.localeCompare(a.date) ||
+            a.name.localeCompare(b.name);
+        });
+
+        summary.textContent = rows.length + ' unimported card expense' + (rows.length === 1 ? '' : 's') +
+          (matchedRows.length > 0 ? (' \u00b7 ' + matchedRows.length + ' matched to trip estimates') : '') +
+          ' \u00b7 ' + winDesc;
+
+        if (rows.length === 0) {
+          wrap.innerHTML = '<div class="sei-table-wrap"><div class="sei-empty">' +
+            (state.loadingCandidates
+              ? 'Searching Sure transactions\u2026'
+              : 'No unimported Sure card expenses match these filters.') +
+            '</div></div>';
+          return;
+        }
+
+        if (matchedRows.length > 0 && otherRows.length > 0) {
+          wrap.innerHTML = '<div class="sei-sections">' +
+            '<div class="sei-section"><div class="sei-section-hdr sei-section-hdr--match">Matched to Trip Estimates <span class="sei-section-cnt">' +
+            matchedRows.length + '</span></div><div class="sei-table-wrap sei-table-wrap--match">' +
+            buildCandidateTableHtml(matchedRows, targetById, true) + '</div></div>' +
+            '<div class="sei-section"><div class="sei-section-hdr">Other Card Charges <span class="sei-section-cnt">' +
+            otherRows.length + '</span></div><div class="sei-table-wrap">' +
+            buildCandidateTableHtml(otherRows, targetById, false) + '</div></div>' +
+            '</div>';
+        } else if (matchedRows.length > 0) {
+          wrap.innerHTML = '<div class="sei-section"><div class="sei-section-hdr sei-section-hdr--match">Matched to Trip Estimates <span class="sei-section-cnt">' +
+            matchedRows.length + '</span></div><div class="sei-table-wrap sei-table-wrap--match">' +
+            buildCandidateTableHtml(matchedRows, targetById, true) + '</div></div>';
+        } else {
+          wrap.innerHTML = '<div class="sei-table-wrap">' + buildCandidateTableHtml(otherRows, targetById, false) + '</div>';
+        }
+
+        wrap.querySelectorAll('button[data-add-id]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            handleAddSingle(btn.getAttribute('data-add-id'));
+          });
+        });
+
+        wrap.querySelectorAll('button[data-open-replace]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var id = btn.getAttribute('data-open-replace');
+            var cand = state.candidates.find(function (x) { return x.id === id; });
+            if (!cand || !cand.replaceSuggestion) return;
+            state.replaceDraft = { txId: id, targetId: cand.replaceSuggestion.targetId, pickingTarget: false };
+            renderCandidates();
+          });
+        });
+
+        wrap.querySelectorAll('button[data-pick-replace]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var id = btn.getAttribute('data-pick-replace');
+            if (state.replaceableTargets.length === 1) {
+              state.replaceDraft = { txId: id, targetId: state.replaceableTargets[0].id, pickingTarget: false };
+            } else {
+              state.replaceDraft = { txId: id, targetId: null, pickingTarget: true };
+            }
+            renderCandidates();
+          });
+        });
+
+        wrap.querySelectorAll('button[data-reopen-picker]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            if (state.replaceDraft) {
+              state.replaceDraft.pickingTarget = true;
+              renderCandidates();
+            }
+          });
+        });
+
+        wrap.querySelectorAll('button[data-back-preview]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            if (state.replaceDraft && state.replaceDraft.targetId) {
+              state.replaceDraft.pickingTarget = false;
+              renderCandidates();
+            }
+          });
+        });
+
+        wrap.querySelectorAll('button[data-choose-target]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            var txId = btn.getAttribute('data-for-tx');
+            var targetId = Number(btn.getAttribute('data-choose-target'));
+            state.replaceDraft = { txId: txId, targetId: targetId, pickingTarget: false };
+            renderCandidates();
+          });
+        });
+
+        wrap.querySelectorAll('button[data-close-replace]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            state.replaceDraft = null;
+            renderCandidates();
+          });
+        });
+
+        wrap.querySelectorAll('button[data-confirm-replace]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            handleConfirmReplace(btn.getAttribute('data-confirm-replace'));
+          });
+        });
+
+        wrap.querySelectorAll('button[data-open-costs]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            if (state.tripId) {
+              trek.navigate('/trips/' + encodeURIComponent(state.tripId) + '?tab=finanzplan');
+            }
+          });
+        });
+      }
+      function statusBadgeHtml(item) {
+        if (item.status === 'changed') return '<span class="trek-chip trek-chip--warning">changed</span>';
+        if (item.status === 'not-expense') return '<span class="trek-chip trek-chip--danger">not-expense</span>';
+        if (item.status === 'missing') return '<span class="trek-chip trek-chip--danger">missing</span>';
+        if (item.status === 'edited-in-trek') return '<span class="trek-chip trek-chip--info">edited-in-trek</span>';
+        return '<span class="trek-chip trek-chip--success">ok</span>';
+      }
+
+      function driftDetailHtml(item) {
+        if (item.status === 'changed' && item.changes) {
+          var parts = [];
+          if (item.changes.name) {
+            parts.push('Name: "' + esc(item.changes.name.before) + '" \u2192 "' + esc(item.changes.name.after) + '"');
+          }
+          if (item.changes.amount) {
+            parts.push('Amount: ' + esc(fmtAmt(item.changes.amount.before, item.changes.amount.currency)) +
+              ' \u2192 ' + esc(fmtAmt(item.changes.amount.after, item.changes.amount.currency)));
+          }
+          if (item.changes.date) {
+            parts.push('Date: ' + esc(item.changes.date.before) + ' \u2192 ' + esc(item.changes.date.after));
+          }
+          return '<div class="sei-diff">' + parts.join('<br/>') + '</div>';
+        }
+        if (item.status === 'missing') {
+          return '<div class="sei-meta">Not found in Sure (HTTP 404 on /api/v1/transactions/:id). TREK cost item is kept intact.</div>';
+        }
+        if (item.status === 'not-expense') {
+          return '<div class="sei-meta">No longer an eligible expense in Sure (transfer, refund, or split parent); amount refresh is disabled.</div>';
+        }
+        if (item.status === 'edited-in-trek') {
+          return '<div class="sei-meta">Edited directly in TREK; Sure refresh is suppressed so edits never overwrite each other.</div>';
+        }
+        return '';
+      }
+
+      function renderImports() {
+        var wrap = document.getElementById('imports-wrap');
+        var countChip = document.getElementById('imports-count-chip');
+        var notice = document.getElementById('window-notice');
+        countChip.textContent = state.imports.length + ' imported';
+        renderTabLabels();
+
+        if (state.lookupInfo && state.imports.length > 0) {
+          notice.hidden = false;
+          notice.textContent =
+            'Live drift check: verified ' + state.lookupInfo.checkedCount + ' mapped transaction' +
+            (state.lookupInfo.checkedCount === 1 ? '' : 's') +
+            ' via Sure REST API (/api/v1/transactions/:id). "missing" never auto-deletes.';
+        } else {
+          notice.hidden = true;
+        }
+
+        if (state.imports.length === 0) {
+          wrap.innerHTML = '<div class="sei-empty">No transactions imported into this trip yet.</div>';
+          return;
+        }
+
+        var html = '<table class="sei-table sei-table--imports"><thead><tr>' +
+          '<th>Date</th>' +
+          '<th>TREK Budget Item</th>' +
+          '<th class="sei-num">Amount</th>' +
+          '<th>Status</th>' +
+          '<th>Actions</th>' +
+          '</tr></thead><tbody>';
+
+        for (var i = 0; i < state.imports.length; i++) {
+          var imp = state.imports[i];
+          var actions = '<div class="trek-cluster">';
+          if (imp.canRefresh) {
+            actions += '<button type="button" class="trek-btn trek-btn--secondary sei-btn-sm" data-refresh-id="' + esc(imp.id) + '">Refresh from Sure</button>';
+          }
+          actions += '<button type="button" class="trek-btn trek-btn--ghost sei-btn-sm" data-unlink-id="' + esc(imp.id) + '">Unlink</button>';
+          actions += '<button type="button" class="trek-btn trek-btn--ghost sei-btn-sm" style="color:var(--danger)" data-unlink-del-id="' + esc(imp.id) + '">Delete in TREK</button>';
+          actions += '</div>';
+
+          var snapMerchantNote = (imp.snapshot && imp.snapshot.name && imp.snapshot.name !== imp.trekItem.name)
+            ? (' \u00b7 ' + imp.snapshot.name)
+            : '';
+          var snapDiffNote = (imp.trekItem.currency !== imp.originalCurrency || Math.abs(Number(imp.trekItem.total_price) - Number(imp.originalAmount)) > 0.009)
+            ? (' \u00b7 Sure ' + fmtAmt(imp.originalAmount, imp.originalCurrency))
+            : '';
+
+          html += '<tr>' +
+            '<td class="sei-imp-date" style="white-space:nowrap">' + esc(imp.trekItem.expense_date || imp.snapshot.date) + '</td>' +
+            '<td class="sei-imp-main"><div class="sei-name">' + esc(imp.trekItem.name) + '</div>' +
+            '<div class="sei-meta">sure:' + esc(imp.sureTransactionId.slice(0, 8)) + '\u2026' + esc(snapMerchantNote) + esc(snapDiffNote) + '</div>' +
+            driftDetailHtml(imp) + '</td>' +
+            '<td class="sei-num sei-imp-amt"><div class="sei-name">' + esc(fmtAmt(imp.trekItem.total_price, imp.trekItem.currency)) + '</div></td>' +
+            '<td class="sei-imp-stat">' + statusBadgeHtml(imp) + '</td>' +
+            '<td class="sei-imp-act">' + actions + '</td>' +
+            '</tr>';
+        }
+        html += '</tbody></table>';
+        wrap.innerHTML = html;
+
+        wrap.querySelectorAll('button[data-refresh-id]').forEach(function (btn) {
+          btn.addEventListener('click', async function () {
+            var id = Number(btn.getAttribute('data-refresh-id'));
+            btn.disabled = true;
+            try {
+              await trek.invoke('/imports/refresh?tripId=' + encodeURIComponent(state.tripId) + '&id=' + encodeURIComponent(id), {
+                method: 'POST',
+                body: { tripId: Number(state.tripId), id: id },
+              });
+              trek.notify('success', 'Budget item refreshed from Sure.');
+              await loadImportsOnly();
+            } catch (e) {
+              trek.notify('error', e.message || 'Refresh failed.');
+              btn.disabled = false;
+            }
+          });
+        });
+
+        wrap.querySelectorAll('button[data-unlink-id]').forEach(function (btn) {
+          btn.addEventListener('click', async function () {
+            var id = Number(btn.getAttribute('data-unlink-id'));
+            var ok = await trek.confirm({
+              title: 'Unlink Sure transaction?',
+              message: 'Removes only the mapping so this transaction can be selected again. The TREK budget item is kept and Sure is not modified.',
+              confirmLabel: 'Unlink & keep item',
+              cancelLabel: 'Cancel',
+            });
+            if (!ok) return;
+            try {
+              await trek.invoke('/imports?tripId=' + encodeURIComponent(state.tripId) + '&id=' + encodeURIComponent(id) + '&deleteBudgetItem=false', {
+                method: 'DELETE',
+              });
+              trek.notify('info', 'Mapping removed; TREK budget item kept.');
+              await loadImportsOnly();
+            } catch (e) {
+              trek.notify('error', e.message || 'Unlink failed.');
+            }
+          });
+        });
+
+        wrap.querySelectorAll('button[data-unlink-del-id]').forEach(function (btn) {
+          btn.addEventListener('click', async function () {
+            var id = Number(btn.getAttribute('data-unlink-del-id'));
+            var ok = await trek.confirm({
+              title: 'Delete imported item in TREK?',
+              message: 'Deletes the TREK budget item and removes the mapping. Sure is never modified.',
+              confirmLabel: 'Delete in TREK',
+              cancelLabel: 'Cancel',
+              danger: true,
+            });
+            if (!ok) return;
+            try {
+              await trek.invoke('/imports?tripId=' + encodeURIComponent(state.tripId) + '&id=' + encodeURIComponent(id) + '&deleteBudgetItem=true', {
+                method: 'DELETE',
+              });
+              trek.notify('info', 'TREK budget item deleted and mapping removed.');
+              await loadImportsOnly();
+            } catch (e) {
+              trek.notify('error', e.message || 'Delete failed.');
+            }
+          });
+        });
+      }
+
+      function buildCandidatesQuery() {
+        var params = ['tripId=' + encodeURIComponent(state.tripId)];
+        if (state.startDate) params.push('startDate=' + encodeURIComponent(state.startDate));
+        if (state.endDate) params.push('endDate=' + encodeURIComponent(state.endDate));
+        if (state.search.trim()) params.push('search=' + encodeURIComponent(state.search.trim()));
+        if (state.category) params.push('category=' + encodeURIComponent(state.category));
+        if (state.tag) params.push('tag=' + encodeURIComponent(state.tag));
+        return '/candidates?' + params.join('&');
+      }
+
+      async function loadCandidatesOnly() {
+        if (!state.tripId) return;
+        state.loadingCandidates = true;
+        showError(null);
+        try {
+          var candData = await trek.invoke(buildCandidatesQuery());
+          state.trip = candData.trip;
+          state.actingUserId = candData.actingUserId != null ? candData.actingUserId : null;
+          state.candidates = candData.candidates || [];
+          state.replaceableTargets = candData.replaceableTargets || [];
+          state.sureCategories = candData.sureCategories || [];
+          state.sureTags = candData.sureTags || [];
+          syncFilterControls(candData.appliedFilters);
+          populateDropdowns(state.sureCategories, state.sureTags);
+          renderHeader();
+          renderCandidates();
+        } catch (err) {
+          showError(err);
+          document.getElementById('candidates-wrap').innerHTML = '<div class="sei-table-wrap"><div class="sei-empty">Unable to load candidates.</div></div>';
+        } finally {
+          state.loadingCandidates = false;
+        }
+      }
+
+      async function loadImportsOnly() {
+        if (!state.tripId) return;
+        try {
+          var impData = await trek.invoke('/imports?tripId=' + encodeURIComponent(state.tripId));
+          state.imports = impData.imports || [];
+          state.lookupInfo = impData.lookup || null;
+          renderImports();
+        } catch (err) {
+          showError(err);
+        }
+      }
+
+      async function loadAll() {
+        if (!state.tripId) {
+          showError(new Error('Open this tab inside a trip to load candidate expenses.'));
+          return;
+        }
+        state.loadingCandidates = true;
+        try {
+          await Promise.all([loadCandidatesOnly(), loadImportsOnly()]);
+        } finally {
+          state.loadingCandidates = false;
+        }
+      }
+
+      document.getElementById('tab-btn-find').addEventListener('click', function () { setTab('find'); });
+      document.getElementById('tab-btn-imported').addEventListener('click', function () { setTab('imported'); });
+
+      document.getElementById('from-date').addEventListener('change', function (ev) {
+        state.startDate = ev.target.value || '';
+        state.allDates = !state.startDate && !state.endDate;
+        loadCandidatesOnly();
+      });
+
+      document.getElementById('to-date').addEventListener('change', function (ev) {
+        state.endDate = ev.target.value || '';
+        state.allDates = !state.startDate && !state.endDate;
+        loadCandidatesOnly();
+      });
+
+      document.getElementById('cat-select').addEventListener('change', function (ev) {
+        state.category = ev.target.value || '';
+        loadCandidatesOnly();
+      });
+
+      document.getElementById('tag-select').addEventListener('change', function (ev) {
+        state.tag = ev.target.value || '';
+        loadCandidatesOnly();
+      });
+
+      document.getElementById('search-input').addEventListener('input', function (ev) {
+        state.search = ev.target.value || '';
+        if (searchTimer) clearTimeout(searchTimer);
+        searchTimer = setTimeout(function () { loadCandidatesOnly(); }, 300);
+      });
+
+      document.getElementById('reload-btn').addEventListener('click', function () { loadAll(); });
+
+      trek.onContext(function (ctx) {
+        var nextTripId = (ctx && ctx.tripId) ? String(ctx.tripId) : (qsTripId() || '');
+        if (!nextTripId) {
+          showError(new Error('No trip context. Open this tab from inside a trip.'));
+          return;
+        }
+        if (nextTripId !== state.tripId) {
+          state.tripId = nextTripId;
+          state.filtersInitialized = false;
+          state.startDate = '';
+          state.endDate = '';
+          state.allDates = false;
+          state.category = '';
+          state.tag = '';
+          state.search = '';
+          state.replaceDraft = null;
+          state.busyTxId = null;
+          setTab('find');
+          loadAll();
+        }
+      });
+
+      setTimeout(function () {
+        if (!state.tripId) trek.requestContext();
+      }, 350);
+
+      trek.onEvent(function (event) {
+        if (typeof event === 'string' && (event.indexOf('budget:') === 0 || event.indexOf('trip:') === 0)) {
+          loadAll();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

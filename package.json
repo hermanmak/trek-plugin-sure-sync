@@ -1,0 +1,36 @@
+{
+  "name": "sure-expense-import",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TREK plugin: import selected Sure card expenses into a trip budget, read-only.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hermanmak/trek-plugin-sure-sync.git"
+  },
+  "homepage": "https://github.com/hermanmak/trek-plugin-sure-sync#readme",
+  "bugs": {
+    "url": "https://github.com/hermanmak/trek-plugin-sure-sync/issues"
+  },
+  "keywords": [
+    "trek",
+    "trek-plugin",
+    "sure",
+    "budget",
+    "expenses"
+  ],
+  "engines": {
+    "node": ">=22.13"
+  },
+  "type": "commonjs",
+  "license": "MIT",
+  "scripts": {
+    "dev": "npx -y trek-plugin-sdk dev",
+    "status": "npx -y trek-plugin-sdk status",
+    "validate": "npx -y trek-plugin-sdk validate",
+    "pack": "npx -y trek-plugin-sdk pack",
+    "test": "node --test test/*.test.js"
+  },
+  "devDependencies": {
+    "trek-plugin-sdk": "^1.7.0"
+  }
+}

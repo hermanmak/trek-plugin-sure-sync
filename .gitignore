@@ -1,0 +1,23 @@
+# dependencies and build output
+node_modules/
+plugin.zip
+
+# trek-plugin dev server state and fixtures (can hold real data)
+.trek-dev/
+dev-fixtures.json
+
+# secrets: never commit signing keys, env files or credentials
+.env
+.env.*
+*.key
+*.pem
+*.p12
+signing.key
+.npmrc
+credentials*.json
+
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/
+*.log

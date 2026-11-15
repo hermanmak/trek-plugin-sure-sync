@@ -1,0 +1,55 @@
+{
+  "id": "sure-expense-import",
+  "name": "Sure Sync",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "author": "Herman Mak",
+  "description": "Match card charges from your self-hosted Sure ledger to trip cost estimates and swap them in with one tap, keeping titles, splits, bookings and receipts intact.",
+  "type": "trip-page",
+  "trek": ">=5.1.0 <6.0.0",
+  "icon": "Receipt",
+  "license": "MIT",
+  "nativeModules": false,
+  "permissions": [
+    "db:own",
+    "db:read:trips",
+    "db:read:costs",
+    "db:write:costs",
+    "rates:read",
+    "http:outbound"
+  ],
+  "egress": [],
+  "operatorEgress": true,
+  "requiredAddons": [
+    "budget"
+  ],
+  "pluginDependencies": [],
+  "settings": [
+    {
+      "key": "sure_url",
+      "label": "Sure base URL",
+      "input_type": "text",
+      "scope": "instance",
+      "required": true,
+      "placeholder": "https://sure.example.com or http://sure:3000",
+      "hint": "Base URL of your self-hosted Sure instance (e.g. https://sure.example.com or http://sure:3000). Add its hostname under Admin → Plugins → Sure Sync → Allowed hosts."
+    },
+    {
+      "key": "sure_api_key",
+      "label": "Sure API key",
+      "input_type": "password",
+      "scope": "instance",
+      "required": false,
+      "secret": true,
+      "hint": "API key from Sure (Settings → API Keys, sent via X-Api-Key; read scope is sufficient). Stored encrypted at rest. Only TREK admins can browse or import card charges with it."
+    }
+  ],
+  "actions": [
+    {
+      "key": "test_connection",
+      "label": "Test connection",
+      "scope": "instance",
+      "hint": "Checks URL format, X-Api-Key authentication, Sure /api/v1 reachability, and active credit-card discovery, naming the first thing that fails."
+    }
+  ]
+}
